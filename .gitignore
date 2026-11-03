@@ -1,0 +1,11 @@
+node_modules
+dist
+*.tsbuildinfo
+*-debug.log
+.firebase
+.vercel
+.claude/
+
+# Real keys and tokens stay on this machine; the template is shared.
+.env*
+!.env.example

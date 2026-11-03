@@ -1,0 +1,190 @@
+@import 'tailwindcss';
+
+:root {
+  --paper: #f4efe3;
+  --card: #fffdf6;
+  --ink: #141414;
+  --muted: #4a4640;
+  --rule: #c9dcec;
+  --margin-line: #e3877f;
+  --note: #ffd23f;
+  --note-pink: #ffb3c4;
+  --note-blue: #a8d8ff;
+  --note-green: #bde8a6;
+  --note-ink: #141414;
+  --stamp: #c8102e;
+  --stamp-btn: #c8102e;
+  --ok: #1f7a3a;
+  --shadow: #141414;
+  color-scheme: light;
+}
+
+/* Exam-eve mode: final 12 hours. Darker, calmer, no new topics. */
+:root[data-eve='true'] {
+  --paper: #121318;
+  --card: #1d1f26;
+  --ink: #f4efe3;
+  --muted: #c3bdb0;
+  --rule: #23262e;
+  --margin-line: #6b2b2b;
+  --note: #ffd23f;
+  --note-pink: #ffb3c4;
+  --note-blue: #a8d8ff;
+  --note-green: #bde8a6;
+  --stamp: #ff6b6b;
+  --stamp-btn: #b3122b;
+  --ok: #7ddc94;
+  --shadow: #000000;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-note: var(--note);
+  --color-note-pink: var(--note-pink);
+  --color-note-blue: var(--note-blue);
+  --color-note-green: var(--note-green);
+  --color-note-ink: var(--note-ink);
+  --color-stamp: var(--stamp);
+  --color-stamp-btn: var(--stamp-btn);
+  --color-ok: var(--ok);
+  --font-display: 'Archivo Black', 'Arial Black', Impact, sans-serif;
+  --font-body: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-hand: 'Permanent Marker', 'Comic Sans MS', cursive;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  --margin-x: -10px;
+  margin: 0;
+  min-height: 100dvh;
+  background-color: var(--paper);
+  /* Exam paper: blue rules with a red margin line. */
+  background-image:
+    linear-gradient(90deg, transparent var(--margin-x), var(--margin-line) var(--margin-x), var(--margin-line) calc(var(--margin-x) + 2px), transparent calc(var(--margin-x) + 2px)),
+    repeating-linear-gradient(180deg, transparent 0 31px, var(--rule) 31px 32px);
+  color: var(--ink);
+  font-family: var(--font-body);
+  transition: background-color 400ms ease, color 400ms ease;
+}
+
+@media (min-width: 640px) {
+  body {
+    --margin-x: 36px;
+  }
+}
+
+:focus-visible {
+  outline: 3px solid var(--stamp);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.hard-shadow {
+  box-shadow: 4px 4px 0 var(--shadow);
+}
+.hard-shadow-sm {
+  box-shadow: 2px 2px 0 var(--shadow);
+}
+
+.hazard {
+  background: repeating-linear-gradient(-45deg, #ffd23f 0 14px, #141414 14px 28px);
+}
+
+.tape::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  width: 84px;
+  height: 22px;
+  transform: translateX(-50%) rotate(-3deg);
+  background: rgb(255 255 255 / 0.55);
+  border: 1px solid rgb(0 0 0 / 0.08);
+}
+
+.press {
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.press:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0 var(--shadow);
+}
+
+.stamp-text {
+  border: 3px solid currentColor;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+@keyframes stamp-in {
+  0% { opacity: 0; transform: scale(2.6) rotate(-18deg); }
+  60% { opacity: 1; transform: scale(0.92) rotate(-10deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-10deg); }
+}
+.animate-stamp { animation: stamp-in 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+
+@keyframes stamp-out { to { opacity: 0; transform: scale(1.08) rotate(-10deg); } }
+.animate-stamp-flash {
+  animation:
+    stamp-in 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both,
+    stamp-out 400ms ease-in 1400ms forwards;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-rise { animation: rise 360ms ease-out both; }
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.animate-sheet { animation: sheet-up 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.animate-fade { animation: fade 200ms ease-out both; }
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+.animate-shake { animation: shake 360ms ease both; }
+
+@keyframes shuffle {
+  0% { opacity: 0; transform: translateX(-24px) rotate(-2deg); }
+  100% { opacity: 1; transform: none; }
+}
+.animate-shuffle { animation: shuffle 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@keyframes wobble {
+  0%, 100% { transform: rotate(-1.5deg); }
+  50% { transform: rotate(1.5deg); }
+}
+.animate-wobble { animation: wobble 1.2s ease-in-out infinite; }
+
+.needle {
+  transition: transform 900ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
