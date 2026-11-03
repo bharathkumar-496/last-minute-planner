@@ -22,7 +22,8 @@ npm run typecheck && npm test && npm run build
 ```
 
 ## Deploy
-Pushing to `main` deploys to Vercel automatically. Google sign-in setup: see
+Pushing to `main` deploys to Vercel automatically (project `lastminuteplanner`).
+Pull requests and other branches get their own preview URL. Google sign-in setup: see
 [SETUP-GOOGLE-LOGIN.md](SETUP-GOOGLE-LOGIN.md).
 
 Built with Vite, React, TypeScript, Tailwind CSS, Vitest and Firebase.
