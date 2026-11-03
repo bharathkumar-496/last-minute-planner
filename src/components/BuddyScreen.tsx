@@ -5,6 +5,7 @@ import {
   guessUnitsFromMaterial,
   introFor,
   parseUnits,
+  profileFromSyllabus,
   replyFor,
   understand,
   wordCount,
@@ -139,7 +140,13 @@ function Feed({ onSession, onSkip }: { onSession: (s: BuddySession) => void; onS
       ...(paste.trim() ? [{ name: 'Pasted syllabus', kind: 'syllabus' as const, words: wordCount(paste) }] : []),
       ...ready.map((u) => ({ name: u.name, kind: u.slot, words: wordCount(u.text ?? '') })),
     ]
-    let session: BuddySession = { units, messages: [], step: 0, weakSkills: [], sources }
+    // The syllabus header usually names the college, code and subject; past papers too.
+    const fromSyllabus = profileFromSyllabus(syllabusText)
+    const fromPapers = papers.map((p) => profileFromSyllabus(p.text))
+    const pick = <K extends keyof typeof fromSyllabus>(k: K) => fromSyllabus[k] ?? fromPapers.find((f) => f[k])?.[k]
+    const found = { college: pick('college'), code: pick('code'), subjectName: pick('subjectName'), course: pick('course') }
+    const profile = found.college || found.code ? { ...found, fromSyllabus: true } : undefined
+    let session: BuddySession = { units, messages: [], step: 0, weakSkills: [], sources, profile }
     // Past papers first (the jaw-drop), then the usual intro and first question.
     if (papers.length) session = withXray(session, papers)
     session = { ...session, messages: [...session.messages, { id: uid(), from: 'buddy', text: introFor(session) }] }
@@ -423,7 +430,7 @@ function Chat({
             {m.card === 'pyq-hunt' ? (
               <PyqHuntCard
                 message={m}
-                profile={{ subject, college: session.profile?.college, code: session.profile?.code }}
+                profile={{ subject: session.profile?.subjectName ?? subject, college: session.profile?.college, code: session.profile?.code }}
                 onDone={(result) => huntDone(m.id, result)}
                 onUpload={uploaded}
               />

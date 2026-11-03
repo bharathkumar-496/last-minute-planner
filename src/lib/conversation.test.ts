@@ -7,6 +7,7 @@ import {
   checkIn,
   chipsFor,
   parseUnits,
+  profileFromSyllabus,
   readIntent,
   replyFor,
   tidyCase,
@@ -133,5 +134,54 @@ describe('typos', () => {
     const hint = understand(session(), 'techer said genetic algoritm is importnt').session
     expect(hint.units[3].teacherHint).toBe(true)
     expect(understand(session(), 'havent started artifical inteligence').session.units[4].confidence).toBe(1)
+  })
+})
+
+describe('reads college, code and subject from the syllabus itself', () => {
+  const SATHYABAMA = `SATHYABAMA INSTITUTE OF SCIENCE AND TECHNOLOGY
+(DEEMED TO BE UNIVERSITY)
+Accredited with Grade "A++" by NAAC
+SCHOOL OF COMPUTING
+B.E. COMPUTER SCIENCE AND ENGINEERING - SEMESTER VI
+SCSB3616 NEURO FUZZY AND GENETIC ALGORITHM L T P C 3 0 0 3
+${SYLLABUS}`
+
+  const ANNA = `ANNA UNIVERSITY, CHENNAI
+AFFILIATED INSTITUTIONS
+B.E. MECHANICAL ENGINEERING
+REGULATIONS 2021
+Course Code: MA3151   Course Title: Matrices and Calculus   L T P C 3 1 0 4
+UNIT I MATRICES 9+3
+Eigenvalues, Eigenvectors`
+
+  it('Sathyabama-style header', () => {
+    expect(profileFromSyllabus(SATHYABAMA)).toEqual({
+      college: 'Sathyabama Institute of Science and Technology',
+      code: 'SCSB3616',
+      subjectName: 'Neuro Fuzzy and Genetic Algorithm',
+      course: 'B.E., Sem VI',
+    })
+  })
+
+  it('Anna University-style header with labels', () => {
+    const p = profileFromSyllabus(ANNA)
+    expect(p.college).toMatch(/^Anna University/)
+    expect(p.code).toBe('MA3151')
+    expect(p.subjectName).toBe('Matrices and Calculus')
+  })
+
+  it('finds nothing in a bare list of units, and never takes "UNIT 1" as a code', () => {
+    expect(profileFromSyllabus(SYLLABUS)).toEqual({})
+  })
+
+  it('skips the college and code questions and goes hunting', () => {
+    const profile = { ...profileFromSyllabus(SATHYABAMA), fromSyllabus: true }
+    const s = session({ step: COLLEGE_STEP - 1, profile, linked: false })
+    const turn = say(s, 'nothing specific')
+    expect(turn.hunt).toBe(true)
+    expect(turn.session.step).toBe(QUESTIONS.length)
+    expect(turn.text).toMatch(/your syllabus says Sathyabama Institute of Science and Technology, subject SCSB3616/)
+    // Coming back later never re-asks what the syllabus answered.
+    expect(checkIn({ ...s, step: COLLEGE_STEP }, id).messages.at(-1)?.text).not.toMatch(/college/i)
   })
 })

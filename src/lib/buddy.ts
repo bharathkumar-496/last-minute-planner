@@ -56,7 +56,7 @@ export interface BuddySession {
   sources: BuddySource[]
   /** Once the plan is built from this chat, every message keeps it in sync. */
   linked?: boolean
-  profile?: { college?: string; course?: string; code?: string }
+  profile?: { college?: string; course?: string; code?: string; subjectName?: string; fromSyllabus?: boolean }
   pyqReport?: PyqReport
   /** Units the buddy just asked about ("What about Unit 3?"), so "it's hard" lands there. */
   pendingUnitIds?: string[]
@@ -610,6 +610,76 @@ export function splitCollege(text: string): { college: string; course?: string }
   return { college: titleIfLower(full.slice(0, at).replace(/[\s,]+$/, '')), course: course || undefined }
 }
 
+// ---------------------------------------------------------------------------
+// Reading the syllabus header: college, subject code, subject name, course
+
+const STRICT_CODE = /\b(?:[A-Z]{2,5}[- ]?\d{2}[A-Z]?\d{1,3}[A-Z]?|\d{2}[A-Z]{2,4}\d{2,3}[A-Z]?)\b/g
+const NOT_A_CODE = /^(UNIT|PART|PAGE|CO|PO|PSO|REG|HRS|HOURS|TOTAL|SEM|YEAR|ISBN|NAAC|NBA|ISO)\b/
+const CODE_LABEL = /\b(course|subject|paper|module)\s*(code|no\.?)|\bcode\s*[:\-]/i
+const QP_CODE = /question\s*paper\s*code/i
+const COLLEGE_LINE = /\b(university|institute|college|vidyapeeth|vidyapith|academy|polytechnic)\b/i
+// "B.E." needs its dot: plain "BE" is usually the word in "deemed to be university".
+const DEGREE = /\b(?:B\.\s?E\.?|B\.?\s?Tech|M\.\s?E\.?|M\.?\s?Tech|B\.?\s?Sc|M\.?\s?Sc|BCA|MCA|MBA|BBA|B\.?\s?Com|M\.?\s?Com|Diploma)(?![a-z])/i
+const SEMESTER = /\b(?:semester|sem)\s*[:\-]?\s*([IVX]{1,4}|\d{1,2})\b/i
+const CREDITS_TAIL = /\b(L\s*T\s*P\s*C?|credits?|hours?\/week|max\.?\s*marks)\b.*$|(\s+\d(\s+\d){2,4})\s*$/i
+
+export interface SyllabusProfile {
+  college?: string
+  code?: string
+  subjectName?: string
+  course?: string
+}
+
+const codesIn = (line: string) => [...line.matchAll(STRICT_CODE)].map((m) => m[0].replace(/[- ]/g, '')).filter((c) => !NOT_A_CODE.test(c))
+
+/** Most syllabi print the college, course code and title in the first few lines. */
+export function profileFromSyllabus(text: string): SyllabusProfile {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+  const head = lines.slice(0, 40)
+  const out: SyllabusProfile = {}
+
+  // Subject code: a labelled one wins; otherwise the first code-looking token near the top.
+  const labelled = head.findIndex((l) => CODE_LABEL.test(l) && !QP_CODE.test(l) && codesIn(l).length)
+  const anyCode = head.findIndex((l) => !QP_CODE.test(l) && !HEADING.test(l) && codesIn(l).length)
+  const codeLine = labelled >= 0 ? labelled : anyCode
+  if (codeLine >= 0) {
+    out.code = codesIn(head[codeLine])[0]
+    // "SCSB3616 NEURO FUZZY AND GENETIC ALGORITHM L T P C 3 0 0 3" → the title.
+    const title = head[codeLine]
+      .replace(new RegExp(out.code.replace(/(\D)(\d)/, '$1[- ]?$2'), 'i'), ' ')
+      .replace(/\b(course|subject|paper)\s*(code|title|name)\b\s*[:\-]?/gi, ' ')
+      .replace(CREDITS_TAIL, ' ')
+      .replace(/^[\s:|\-–]+|[\s:|\-–]+$/g, '')
+      .trim()
+    if (/[a-z]{3}/i.test(title) && title.length >= 4 && title.length <= 90 && !COLLEGE_LINE.test(title)) out.subjectName = tidyCase(title)
+  }
+  if (!out.subjectName) {
+    const titled = head.find((l) => /\b(course|subject|paper)\s*(title|name)\b/i.test(l))
+    const t = titled?.replace(/.*\b(?:title|name)\b\s*[:\-]?\s*/i, '').replace(CREDITS_TAIL, '').trim()
+    if (t && /[a-z]{3}/i.test(t)) out.subjectName = tidyCase(t.slice(0, 90))
+  }
+
+  // College: the first line naming a university/institute/college, minus accreditation fluff.
+  const collegeLine = head.find((l) => COLLEGE_LINE.test(l) && l.length <= 140 && !/affiliated|approved by|recognised by|recognized by/i.test(l))
+  if (collegeLine) {
+    let c = collegeLine
+      .replace(/\(.*?\)/g, ' ')
+      .replace(/\b(accredited|naac|nba|an autonomous|autonomous|estd\.?|established|ugc|aicte|iso)\b.*$/i, ' ')
+      .replace(/[,\-–|:]+\s*$/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (c.length >= 4) out.college = tidyCase(c.slice(0, 80))
+  }
+
+  const degree = head.map((l) => l.match(DEGREE)?.[0]).find(Boolean)
+  const sem = head.map((l) => l.match(SEMESTER)?.[1]).find(Boolean)
+  if (degree || sem) out.course = [degree?.replace(/\s+/g, ''), sem && `Sem ${sem}`].filter(Boolean).join(', ')
+  return out
+}
+
 export function cleanCollege(text: string): string {
   let t = text
     .replace(SUBJECT_CODE, ' ')
@@ -684,6 +754,8 @@ export interface Turn {
   reply?: string
   /** Start a past-paper hunt after replying. */
   hunt?: boolean
+  /** The hunt started because the syllabus already said which college and code. */
+  autoProfile?: boolean
 }
 
 const priorityOf = (u: BuddyUnit) => (u.marks * (6 - u.confidence)) / Math.max(u.hours, 0.25)
@@ -781,8 +853,27 @@ function answerQuestion(session: BuddySession, message: string): Turn | null {
   return null
 }
 
+/** Moves past college/code questions the syllabus already answered. */
+function skipKnown(session: BuddySession, step: number): number {
+  while (QUESTIONS[step]?.kind === 'college' && session.profile?.college) step++
+  while (QUESTIONS[step]?.kind === 'code' && session.profile?.code) step++
+  return step
+}
+
+/** When skipping lands on "done" with a known college, go hunting without asking. */
+function withAutoHunt(before: BuddySession, turn: Turn): Turn {
+  const { session } = turn
+  const jumpedPast = before.step < COLLEGE_STEP && session.step >= QUESTIONS.length
+  if (jumpedPast && session.profile?.college && !session.pyqReport && !turn.hunt) return { ...turn, hunt: true, autoProfile: true }
+  return turn
+}
+
 /** Applies one chat message to the session. Returns what was understood. */
 export function understand(session: BuddySession, raw: string): Turn {
+  return withAutoHunt(session, understandRaw(session, raw))
+}
+
+function understandRaw(session: BuddySession, raw: string): Turn {
   const message = fixTypos(raw)
   const profiled = profileTurn(session, message)
   if (profiled) return profiled
@@ -790,7 +881,7 @@ export function understand(session: BuddySession, raw: string): Turn {
   if (answered) return answered
   // "No hints" / "nothing specific" just move on; "nothing" mustn't mean "every unit".
   if (NO.test(message) && wordCount(message) <= 4 && resolveUnits(message.replace(ALL, ''), session.units).length === 0 && !readIntent(message).skills.length) {
-    return { session: { ...session, step: QUESTIONS[session.step] ? session.step + 1 : session.step }, understood: [] }
+    return { session: { ...session, step: QUESTIONS[session.step] ? skipKnown(session, session.step + 1) : session.step }, understood: [] }
   }
 
   const units = session.units.map((u) => ({ ...u, focus: [...u.focus], skills: [...u.skills] }))
@@ -911,7 +1002,14 @@ export function understand(session: BuddySession, raw: string): Turn {
   const pendingIntent = !understood.length && orphanIntent ? orphanIntent : undefined
   return {
     // College/code questions only move on when they're actually answered.
-    session: { ...session, units, weakSkills, step: said && question && !question.kind ? session.step + 1 : session.step, pendingUnitIds, pendingIntent },
+    session: {
+      ...session,
+      units,
+      weakSkills,
+      step: said && question && !question.kind ? skipKnown(session, session.step + 1) : session.step,
+      pendingUnitIds,
+      pendingIntent,
+    },
     understood,
   }
 }
@@ -949,6 +1047,13 @@ export function replyFor(before: BuddySession, turn: Turn, raw: string): string 
   }
 
   const followingUp = !understood.length && (session.pendingUnitIds?.length || session.pendingIntent)
+  if (turn.autoProfile) {
+    const p = session.profile!
+    lines.push(
+      `🎓 No need to ask your college: your syllabus says ${p.college}${p.code ? `, subject ${p.code}` : ''}${p.subjectName ? ` (${p.subjectName})` : ''}. Digging up your past papers now… 🕵️`,
+    )
+    return lines.filter(Boolean).join('\n\n')
+  }
   if (next && !followingUp && (advanced || !understood.length)) lines.push(next.ask(session))
   else if (!next && session.linked) lines.push(understood.length ? 'Anything else changed?' : '')
   else if (!next && advanced) lines.push("That's everything I need. Hit \"Build my plan\" when you're ready, or keep telling me stuff.")
@@ -966,6 +1071,11 @@ export function introFor(session: BuddySession): string {
   if (syllabus.length) read.push('your syllabus')
   if (material.length) read.push(`${material.length} file${material.length === 1 ? '' : 's'} of notes (${materialWords.toLocaleString()} words)`)
   lines.push(`I read ${read.join(' and ') || 'what you gave me'}. Found ${units.length} unit${units.length === 1 ? '' : 's'}:`)
+  const p = session.profile
+  if (p?.fromSyllabus && (p.college || p.code)) {
+    const bits = [p.college, p.code && `${p.code}${p.subjectName ? ` ${p.subjectName}` : ''}`, p.course].filter(Boolean)
+    lines.splice(0, 0, `📋 Your syllabus says: ${bits.join(' · ')}. I'll use that to hunt your past papers.`)
+  }
   lines.push(units.map((u, i) => `${i + 1}. ${u.name}${u.materialWords ? ` (~${u.hours}h)` : ''}`).join('\n'))
   const heavy = [...units].filter((u) => u.materialWords > 0).sort((a, b) => b.materialWords - a.materialWords)[0]
   if (heavy && units.filter((u) => u.materialWords > 0).length > 1) lines.push(`${short(heavy.name)} has the most notes. Respect.`)
@@ -1015,7 +1125,8 @@ export const CHECK_IN =
 export function checkIn(session: BuddySession, makeId: () => string): BuddySession {
   const last = session.messages[session.messages.length - 1]
   // Left halfway through "which college?" / "subject code?": pick that thread back up.
-  const pending = QUESTIONS[session.step]?.kind ? session.step : null
+  const known = skipKnown(session, session.step)
+  const pending = QUESTIONS[known]?.kind ? known : null
   const step = pending ?? Math.max(session.step, QUESTIONS.length)
   const text = pending !== null ? `Welcome back! Quick one before we carry on. ${QUESTIONS[pending].ask(session)}` : CHECK_IN
   if (last?.from === 'buddy' && last.text === text) return { ...session, step, linked: true }
