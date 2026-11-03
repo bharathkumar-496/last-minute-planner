@@ -58,6 +58,10 @@ export interface BuddySession {
   linked?: boolean
   profile?: { college?: string; course?: string; code?: string }
   pyqReport?: PyqReport
+  /** Units the buddy just asked about ("What about Unit 3?"), so "it's hard" lands there. */
+  pendingUnitIds?: string[]
+  /** Something said without a unit ("it's so hard"), waiting for "unit 3". */
+  pendingIntent?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +102,23 @@ function romanToInt(s: string): number {
 const HEADING = /^\s*(?:unit|chapter|module|lesson|part|section)\s*[-–:.]?\s*(\d+|[ivxlc]+)\b/i
 const INLINE_HEADING = /(?=\b(?:unit|chapter|module|lesson)\s*[-–:.]?\s*(?:\d+|[ivxlc]+)\b)/gi
 const MARKS = /\(?\s*(\d{1,3})\s*(?:marks?|m|pts?|points?)\s*\)?/i
+
+/** "9 Hrs", "(9 hours)", "12 Periods", "L 9" after a unit title: teaching time, not part of the name. */
+const CONTACT_HOURS = /\(?\s*\b(?:\d{1,2}\s*(?:hrs?|hours?|periods?|lectures?)\b\.?|L\s*\d{1,2}\b)\s*\)?/gi
+const SMALL_WORDS = new Set(['and', 'of', 'the', 'in', 'to', 'for', 'with', 'on', 'a', 'an', 'or', 'by'])
+const ROMAN_NUMERAL = /^(i{1,3}|iv|v|vi{1,3}|ix|x)$/i
+
+/** "UNIT III: NEURO FUZZY AND AI" → "Unit III: Neuro Fuzzy and AI". Mixed-case text is left alone. */
+export function tidyCase(text: string): string {
+  if (!/[A-Z]{3}/.test(text) || text !== text.toUpperCase()) return text
+  return text.replace(/[A-Za-z][A-Za-z']*/g, (w: string, i: number) => {
+    if (ROMAN_NUMERAL.test(w)) return w.toUpperCase()
+    const lower = w.toLowerCase()
+    if (i > 0 && SMALL_WORDS.has(lower)) return lower
+    if (w.length <= 3 && !/[AEIOU]/.test(w.slice(1))) return w // AI, ML, DSP: acronyms stay
+    return lower[0].toUpperCase() + lower.slice(1)
+  })
+}
 
 export function unitNumber(name: string): number | null {
   const m = name.match(HEADING)
@@ -158,8 +179,11 @@ export function parseUnits(text: string): ParsedUnit[] {
       } else if (rest.includes(',')) {
         subtopics = splitList(rest)
       }
-      const name = `${head.replace(/\s+/g, ' ')}${title ? `: ${title}` : ''}`.replace(/[\s:.,–-]+$/, '').slice(0, 80)
-      units.push({ name: name.charAt(0).toUpperCase() + name.slice(1), marks, subtopics })
+      title = tidyCase(title.replace(CONTACT_HOURS, ' ').replace(/\s+/g, ' ').trim())
+      const cleanHead = tidyCase(head.replace(/\s+/g, ' '))
+      const name = `${cleanHead}${title ? `: ${title}` : ''}`.replace(/[\s:.,–-]+$/, '').slice(0, 80)
+      const subs = subtopics.map((t) => tidyCase(t.replace(CONTACT_HOURS, ' ').replace(/\s+/g, ' ').trim())).filter((t) => t.length > 1)
+      units.push({ name: name.charAt(0).toUpperCase() + name.slice(1), marks, subtopics: subs })
     } else if (units.length) {
       const last = units[units.length - 1]
       last.subtopics.push(...splitList(line))
@@ -329,6 +353,44 @@ const ORDINALS: Record<string, number> = {
 }
 const NUM_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 }
 
+/** Edit distance, capped: small typos ("nuero", "fuzy") still find their unit. */
+function near(a: string, b: string): boolean {
+  const limit = Math.max(a.length, b.length) >= 8 ? 2 : 1
+  if (Math.abs(a.length - b.length) > limit) return false
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i]
+    for (let j = 1; j <= b.length; j++) row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    if (Math.min(...row) > limit) return false
+    prev = row
+  }
+  return prev[b.length] <= limit
+}
+
+const TYPOS: Array<[RegExp, string]> = [
+  [/\b(dont|dnt)\b/gi, "don't"],
+  [/\b(havent|havnt|hvnt|haven t)\b/gi, "haven't"],
+  [/\b(didnt|didn t)\b/gi, "didn't"],
+  [/\b(cant|cnt)\b/gi, "can't"],
+  [/\b(im|i m)\b/gi, "i'm"],
+  [/\b(finshed|finsihed|fnished|finised|finishd|fineshed)\b/gi, 'finished'],
+  [/\b(complted|compelted|completd|competed)\b/gi, 'completed'],
+  [/\b(startd|strated|stared it)\b/gi, 'started'],
+  [/\b(techer|teachr|teacer|teahcer|tchr)\b/gi, 'teacher'],
+  [/\b(importnt|importent|imporant|importamt|impotant)\b/gi, 'important'],
+  [/\b(dificult|difficlt|difficut|dificlt)\b/gi, 'difficult'],
+  [/\b(subjec|subjct|subj)\b/gi, 'subject'],
+  [/\b(syllabs|sylabus|syllbus)\b/gi, 'syllabus'],
+  [/\b(numaricals|numricals|numerical's)\b/gi, 'numericals'],
+  [/\b(derivatons|derivasions)\b/gi, 'derivations'],
+  [/\b(confusng|confuseing)\b/gi, 'confusing'],
+  [/\b(pls|plz)\b/gi, 'please'],
+]
+
+export function fixTypos(text: string): string {
+  return TYPOS.reduce((t, [re, to]) => t.replace(re, to), text)
+}
+
 const ALL = /\b(all|everything|every unit|whole (syllabus|thing|portion)|entire syllabus|anything|nothing)\b/
 const EXCEPT = /\b(except|other than|apart from|besides|but not)\b/
 
@@ -363,8 +425,10 @@ export function resolveUnits(text: string, units: Pick<BuddyUnit, 'name' | 'subt
   // Names and subtopics: "thermodynamics", "laplace". "Vector calculus" picks
   // Vector Calculus, not every unit with "calculus" in it: best score wins.
   const tw = new Set(words(t).map(stem))
+  const typed = [...tw].filter((w) => w.length >= 4)
+  const hit = (k: string) => tw.has(k) || (k.length >= 5 && typed.some((w) => near(w, k)))
   const scores = units.map((u) => {
-    const keys = keywordsOf(u.name).filter((k) => tw.has(k)).length
+    const keys = keywordsOf(u.name).filter(hit).length
     const subs = u.subtopics.filter((s) => s.length >= 5 && t.includes(s.toLowerCase())).length
     return keys + subs * 2
   })
@@ -409,7 +473,7 @@ const SKILL_WORDS: Array<[RegExp, Skill]> = [
   [/\b(definitions?|terms|terminology)\b/, 'definitions'],
   [/\b(theory|long answers?|essays?|concepts)\b/, 'theory'],
   [/\b(formulas?|formulae|equations)\b/, 'formulas'],
-  [/\b(programs?|programming|coding|code)\b/, 'programs'],
+  [/\b(programs?|programming|coding)\b/, 'programs'],
 ]
 
 export interface Understanding {
@@ -574,6 +638,12 @@ const refName = (u: BuddyUnit) => {
 }
 
 export function chipsFor(session: BuddySession): string[] {
+  const pending = (session.pendingUnitIds ?? []).map((id) => session.units.find((u) => u.id === id)).filter((u): u is BuddyUnit => !!u)
+  if (pending.length === 1) {
+    const r = refName(pending[0])
+    return [`${r} is done`, `${r} is hard`, `Haven't started ${r}`, `${r} is important`]
+  }
+  if (session.pendingIntent) return session.units.filter((u) => !u.skipped).slice(0, 6).map((u) => refName(u))
   const asked = QUESTIONS[session.step]?.chips
   if (asked) return asked
   const open = session.units.filter((u) => !u.skipped && !u.finished)
@@ -595,6 +665,11 @@ const CONFIDENCE_WORDS: Record<Confidence, string> = {
 
 const short = (name: string) => (name.length > 32 ? `${name.slice(0, 30)}…` : name)
 const nameList = (units: BuddyUnit[], idx: number[]) => {
+  const nums = idx.map((i) => unitNumber(units[i].name))
+  if (idx.length >= 2 && nums.every((n) => n !== null)) {
+    const list = nums.map(String)
+    return `Units ${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`
+  }
   const names = idx.map((i) => short(units[i].name))
   if (names.length <= 2) return names.join(' and ')
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
@@ -611,13 +686,20 @@ export interface Turn {
   hunt?: boolean
 }
 
+const priorityOf = (u: BuddyUnit) => (u.marks * (6 - u.confidence)) / Math.max(u.hours, 0.25)
+const isQuestion = (t: string) => /\?\s*$/.test(t) || /^\s*(what|which|how|where|when|should|can|could|do|does|tell me)\b/i.test(t)
+
 const HUNT_REPLY = "Give me a sec. I'm digging through past papers for you… 🕵️"
 
 /** College and subject-code answers, and "find my past papers" at any time. */
 function profileTurn(session: BuddySession, message: string): Turn | null {
-  const kind = QUESTIONS[session.step]?.kind
   const profile = { ...session.profile }
   const done = QUESTIONS.length
+  // "Which college?" is open, but they said "unit 2 is hard": that's about units, not a college.
+  const aboutUnits =
+    (resolveUnits(message, session.units).length > 0 && hasIntent(readIntent(message))) || isQuestion(message) || PYQ_REQUEST.test(message)
+  const asked = QUESTIONS[session.step]?.kind
+  const kind = asked && !(aboutUnits && !extractCode(message)) ? asked : undefined
 
   if (kind === 'college') {
     if (SKIP.test(message)) {
@@ -643,6 +725,20 @@ function profileTurn(session: BuddySession, message: string): Turn | null {
     return { session: { ...session, profile, step: done }, understood: [], reply: code ? `🔢 ${code}, noted. ${HUNT_REPLY}` : HUNT_REPLY, hunt: true }
   }
 
+  // A subject code can arrive at any point ("SCSB3616 is my subject code").
+  const code = extractCode(message)
+  if (code && session.step >= done && resolveUnits(message, session.units).length === 0) {
+    profile.code = code
+    if (!profile.college) {
+      return {
+        session: { ...session, profile, step: COLLEGE_STEP },
+        understood: [],
+        reply: `🔢 ${code}, noted. One more thing so I can hunt your past papers: which college or university are you in?`,
+      }
+    }
+    return { session: { ...session, profile }, understood: [], reply: `🔢 ${code}, noted. ${HUNT_REPLY}`, hunt: true }
+  }
+
   if (session.step >= done && PYQ_REQUEST.test(message)) {
     if (!profile.college) return { session: { ...session, step: COLLEGE_STEP }, understood: [], reply: QUESTIONS[COLLEGE_STEP].ask(session) }
     return { session, understood: [], reply: HUNT_REPLY, hunt: true }
@@ -650,10 +746,48 @@ function profileTurn(session: BuddySession, message: string): Turn | null {
   return null
 }
 
+
+/** "What should I study first?", "which unit matters most?", "how much is left?", "what can you do?" */
+function answerQuestion(session: BuddySession, message: string): Turn | null {
+  const t = message.toLowerCase()
+  const open = session.units.filter((u) => !u.skipped && !u.finished)
+  const say = (reply: string): Turn => ({ session, understood: [], reply })
+  if (/\b(thanks|thank you|thx|tysm|ty)\b/.test(t) && wordCount(t) <= 5) return say('Anytime. Now go get those marks. 💪')
+  if (/\b(what can you do|how does this work|what do you do|what are you|help me|^help)\b/.test(t)) {
+    return say(
+      'I can:\n• Update the plan when you tell me things ("unit 3 is done", "unit 2 is hard", "teacher said unit 4 is important")\n• Hunt and X-ray past papers ("find my past papers")\n• Tell you what to study first, or what matters most\nJust talk normally. Typos are fine.',
+    )
+  }
+  if (!isQuestion(t)) return null
+  if (open.length === 0) return say("Everything's marked done. Honestly? Sleep. That's the plan now. 😴")
+  if (/\b(first|next|now|start|begin|today|tonight|focus)\b/.test(t) && /\b(study|do|start|begin|learn|focus|read|revise|prepare)\b/.test(t)) {
+    const top = [...open].sort((a, b) => priorityOf(b) - priorityOf(a))
+    const why = whyFor(top[0], session.weakSkills)
+    return say(
+      `Start with ${top[0].name}.${why ? ` (${why})` : ''}${top[0].focus.length ? `\nFocus on: ${top[0].focus.slice(0, 3).join(' · ')}` : ''}${top[1] ? `\n\nThen ${top[1].name}.` : ''}`,
+    )
+  }
+  if (/\b(important|imp|matters?|most marks|more marks|highest|weightage|priority|scoring)\b/.test(t)) {
+    const byMarks = [...open].sort((a, b) => b.marks - a.marks).slice(0, 3)
+    const pyq = open.filter((u) => u.pyq && u.pyq.papers > 0).sort((a, b) => b.pyq!.papers - a.pyq!.papers)[0]
+    return say(
+      `Biggest marks: ${byMarks.map((u) => `${u.name} (${u.marks})`).join(', ')}.${pyq ? `\nPast papers love ${pyq.name}: it showed up in ${pyq.pyq!.papers} of ${pyq.pyq!.of}.` : ''}${!session.pyqReport ? '\nWant proof from real exams? Say "find my past papers".' : ''}`,
+    )
+  }
+  if (/\b(how (much|many|long)|left|remaining)\b/.test(t) && /\b(left|remaining|hours?|time|work|units?|topics?)\b/.test(t)) {
+    const hours = open.reduce((a, u) => a + u.hours, 0)
+    return say(`${open.length} unit${open.length === 1 ? '' : 's'} left, about ${Math.round(hours * 2) / 2} hours of study. Your plan tab has the exact schedule.`)
+  }
+  return null
+}
+
 /** Applies one chat message to the session. Returns what was understood. */
-export function understand(session: BuddySession, message: string): Turn {
+export function understand(session: BuddySession, raw: string): Turn {
+  const message = fixTypos(raw)
   const profiled = profileTurn(session, message)
   if (profiled) return profiled
+  const answered = answerQuestion(session, message)
+  if (answered) return answered
   // "No hints" / "nothing specific" just move on; "nothing" mustn't mean "every unit".
   if (NO.test(message) && wordCount(message) <= 4 && resolveUnits(message.replace(ALL, ''), session.units).length === 0 && !readIntent(message).skills.length) {
     return { session: { ...session, step: QUESTIONS[session.step] ? session.step + 1 : session.step }, understood: [] }
@@ -663,7 +797,10 @@ export function understand(session: BuddySession, message: string): Turn {
   const weakSkills = [...session.weakSkills]
   const understood: string[] = []
   const question = QUESTIONS[session.step]
-  let lastRefs: number[] = []
+  const pendingIdx = (session.pendingUnitIds ?? []).map((id) => units.findIndex((u) => u.id === id)).filter((i) => i >= 0)
+  let lastRefs: number[] = pendingIdx
+  const mentionedOnly = new Set<number>()
+  let orphanIntent = ''
   const lower = message.toLowerCase()
 
   // "Total exam is 80 marks" rescales unit marks.
@@ -682,9 +819,13 @@ export function understand(session: BuddySession, message: string): Turn {
   for (const clause of clauses(message)) {
     let refs = resolveUnits(clause, units, true)
     let intent = readIntent(clause)
+    // "unit 3" after "it's so hard": the earlier feeling finds its unit.
+    if (!hasIntent(intent) && refs.length && session.pendingIntent) intent = readIntent(session.pendingIntent)
     if (!hasIntent(intent) && refs.length && question) intent = { skills: [], ...question.defaultIntent }
+    if (!hasIntent(intent) && refs.length) refs.forEach((i) => mentionedOnly.add(i))
     // "...and it's hard" / "same" refers back; anything longer must name its unit.
-    const refersBack = /\b(it|its|it's|that|this|they|them|those|both|same)\b/i.test(clause) || wordCount(clause) <= 3
+    const refersBack = /\b(it|its|it's|that|this|they|them|those|both|same)\b/i.test(clause) || wordCount(clause) <= (pendingIdx.length ? 6 : 3)
+    if (refs.length === 0 && hasIntent(intent) && !intent.skills.length && !(lastRefs.length && refersBack)) orphanIntent = clause
     if (refs.length === 0 && hasIntent(intent) && lastRefs.length && !intent.skills.length && refersBack) refs = lastRefs
     if (refs.length) lastRefs = refs
 
@@ -765,14 +906,19 @@ export function understand(session: BuddySession, message: string): Turn {
   }
 
   const said = understood.length > 0 || NO.test(message)
+  // Nothing landed: remember what's half-said so the next message can finish it.
+  const pendingUnitIds = !understood.length && mentionedOnly.size ? [...mentionedOnly].map((i) => units[i].id) : undefined
+  const pendingIntent = !understood.length && orphanIntent ? orphanIntent : undefined
   return {
-    session: { ...session, units, weakSkills, step: said && question ? session.step + 1 : session.step },
+    // College/code questions only move on when they're actually answered.
+    session: { ...session, units, weakSkills, step: said && question && !question.kind ? session.step + 1 : session.step, pendingUnitIds, pendingIntent },
     understood,
   }
 }
 
-export function replyFor(before: BuddySession, turn: Turn, message: string): string {
+export function replyFor(before: BuddySession, turn: Turn, raw: string): string {
   if (turn.reply) return turn.reply
+  const message = fixTypos(raw)
   const { session, understood } = turn
   const next = QUESTIONS[session.step]
   const advanced = session.step > before.step
@@ -790,11 +936,20 @@ export function replyFor(before: BuddySession, turn: Turn, message: string): str
     lines.push("Hey! Let's save some marks.")
   } else if (/\b(help|how|what do i|idk|i don'?t know)\b/i.test(message)) {
     lines.push('Just talk to me like a friend. Try "Unit 3 is my weak spot", "teacher said unit 2 is important", or "unit 4 is 20 marks".')
+  } else if (session.pendingUnitIds?.length) {
+    const named = session.pendingUnitIds.map((id) => session.units.find((u) => u.id === id)!).filter(Boolean)
+    lines.push(`What about ${named.map((u) => u.name).join(' and ')}? Done, hard, or not started yet?`)
+  } else if (session.pendingIntent) {
+    lines.push('Which unit is that about? Tap one below, or type its number.')
   } else {
-    lines.push("Hmm, I couldn't tell which unit you meant. Try naming it: \"Unit 2 is hard\" or just \"2 and 4\".")
+    const ex = session.units.find((u) => !u.skipped)
+    lines.push(
+      `I didn't quite get that. Try something like "${ex ? refName(ex) : 'unit 1'} is done", "${ex ? refName(ex) : 'unit 2'} is hard", or ask me "what should I study first?"`,
+    )
   }
 
-  if (next && (advanced || !understood.length)) lines.push(next.ask(session))
+  const followingUp = !understood.length && (session.pendingUnitIds?.length || session.pendingIntent)
+  if (next && !followingUp && (advanced || !understood.length)) lines.push(next.ask(session))
   else if (!next && session.linked) lines.push(understood.length ? 'Anything else changed?' : '')
   else if (!next && advanced) lines.push("That's everything I need. Hit \"Build my plan\" when you're ready, or keep telling me stuff.")
   else if (!next) lines.push('Anything else? Otherwise, build the plan.')
@@ -859,9 +1014,12 @@ export const CHECK_IN =
 /** Coming back from the plan: the chat carries on where it left off. */
 export function checkIn(session: BuddySession, makeId: () => string): BuddySession {
   const last = session.messages[session.messages.length - 1]
-  const step = Math.max(session.step, QUESTIONS.length)
-  if (last?.from === 'buddy' && last.text === CHECK_IN) return { ...session, step, linked: true }
-  return { ...session, step, linked: true, messages: [...session.messages, { id: makeId(), from: 'buddy', text: CHECK_IN }] }
+  // Left halfway through "which college?" / "subject code?": pick that thread back up.
+  const pending = QUESTIONS[session.step]?.kind ? session.step : null
+  const step = pending ?? Math.max(session.step, QUESTIONS.length)
+  const text = pending !== null ? `Welcome back! Quick one before we carry on. ${QUESTIONS[pending].ask(session)}` : CHECK_IN
+  if (last?.from === 'buddy' && last.text === text) return { ...session, step, linked: true }
+  return { ...session, step, linked: true, messages: [...session.messages, { id: makeId(), from: 'buddy', text }] }
 }
 
 /** A plan built without the buddy (sample exam, typed topics) still gets a chat. */

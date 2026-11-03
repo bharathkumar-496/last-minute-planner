@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  QUESTIONS,
   buildUnits,
   checkIn,
   mergeTopics,
@@ -190,7 +191,7 @@ describe('understand', () => {
     expect(none.session.step).toBe(1)
     const confused = understand(s, 'banana')
     expect(confused.session.step).toBe(0)
-    expect(replyFor(s, confused, 'banana')).toMatch(/couldn't tell which unit/)
+    expect(replyFor(s, confused, 'banana')).toMatch(/didn't quite get that/)
   })
 
   it('rescales marks to a stated paper total', () => {
@@ -210,7 +211,7 @@ describe('chat and plan stay in sync', () => {
 
   it('marks a unit done from chat once the plan exists, and the plan follows', () => {
     let s = session()
-    s = { ...s, step: 4 }
+    s = { ...s, step: QUESTIONS.length }
     const before = understand(s, 'finished unit 1')
     expect(before.session.units[0].finished).toBeUndefined() // not linked yet: just confidence
     s = checkIn(s, id)

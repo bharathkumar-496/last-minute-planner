@@ -77,7 +77,7 @@ export function SetupScreen({
               onChange={(e) => update({ examAt: e.target.value })}
               aria-invalid={!!errors.examAt}
               aria-describedby={errors.examAt ? 'exam-error' : undefined}
-              className="min-h-12 w-full rounded-lg border-[3px] border-ink bg-card px-3 text-lg text-ink"
+              className="min-h-12 w-full rounded-lg border-[3px] border-ink bg-card px-3 text-base text-ink sm:text-lg"
             />
             {errors.examAt && (
               <p id="exam-error" role="alert" className="mt-1 font-bold text-stamp">
